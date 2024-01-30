@@ -1,0 +1,115 @@
+#!/bin/bash
+set -e
+
+# Usage Examples:
+# 
+# Generate an instant dump
+# ./dump
+#
+# Generate a dump prefixed with a label
+# ./dump label="hourly"
+#
+# Generate a dump prefixed with a label and push it to Dropbox
+# ./dump label="daily" push="dropbox"
+
+### EDIT FOLLOWING
+
+  # Target Directory
+  TD="dumps"
+
+  # Dropbox Details in case you want to push the Dump to Dropbox.
+  # You will need to create a Dropbox App and get the access token.
+  DBXCLIENT="PROJECT-X"
+  DBXTOKEN=""
+
+### STOP EDITING 
+
+# Cron Safe working dir
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR
+
+# Supported config files to fetch Database Details from:
+
+# WordPress
+if [ ! -f wp-config.php ]; then
+    echo "None of the supported config file (Ex: wp-config.php for WordPress) exist . Aborting."
+    echo "Alvida"
+    exit
+fi
+
+# Date Stuff
+TS=$(date +%Y%m%d%H%M%S)
+TSYEAR=$(date +%Y)
+TSMONTH=$(date +%m)
+TSDAY=$(date +%d)
+
+# CLI Arguments
+push=""
+label="instant"
+
+for ARGUMENT in "$@"
+do
+  KEY=$(echo $ARGUMENT | cut -f1 -d=)
+  KEY_LENGTH=${#KEY}
+  VALUE="${ARGUMENT:$KEY_LENGTH+1}"
+  export "$KEY"="$VALUE"
+done
+
+if [[ $push = "" ]]; then 
+  DBXTOKEN=""
+fi
+
+# File prefix
+PRE=$label
+if [[ $label = "instant" ]]
+then
+  PRE="instant-$TS"
+fi
+
+mkdir -p $TD >/dev/null 2>&1
+
+DB=$(sed -n "s/define( *'DB_NAME', *'\([^']*\)'.*/\1/p" wp-config.php)
+US=$(sed -n "s/define( *'DB_USER', *'\([^']*\)'.*/\1/p" wp-config.php)
+PS=$(sed -n "s/define( *'DB_PASSWORD', *'\([^']*\)'.*/\1/p" wp-config.php)
+
+# File Name
+FN="$PRE-$DB.sql.gz"
+
+# File Path
+FP="$TD/$FN"
+rm -f $FP
+
+echo
+echo "Time now: `date`" 
+echo "DB Name: $DB"
+
+mysqldump --no-tablespaces -u $US -p"$PS" $DB | gzip > $FP
+
+# File Size
+FS=$(ls -lh $FP | awk '{print $5}') 
+
+echo 
+echo "Success"
+echo "$FP ($FS)"
+
+if [[ $DBXTOKEN = "" ]]; then   
+  # : # Do Nothing
+  echo
+  echo "Not pushing dump to Dropbox. Push not requested, or Auth Token not provided."
+else 
+  echo 
+  echo "Pushing to Dropbox."
+  DBXTD="/$DBXCLIENT/$TD/$label/$TSYEAR/$TSMONTH/$TSDAY/$FN"
+
+  curl -X POST https://content.dropboxapi.com/2/files/upload \
+  --header "Authorization: Bearer $DBXTOKEN" \
+  --header "Dropbox-API-Arg: {\"path\": \"$DBXTD\",\"mode\": \"add\",\"autorename\": true,\"mute\": true,\"strict_conflict\": false}" \
+  --header "Content-Type: application/octet-stream" \
+  --data-binary @"$FP"
+
+  echo
+  echo "Done" 
+fi
+
+echo
+echo "Alvida"
